@@ -1,0 +1,10 @@
+{
+  "model_type": "classifier",
+  "profile": "light",
+  "input_features": "graph",
+  "properties": [
+    "solubility",
+    "logp",
+    "molecular_weight"
+  ]
+}

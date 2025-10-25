@@ -1,0 +1,10 @@
+{
+  "model_type": "xgboost",
+  "profile": "light",
+  "input_features": "molecular_fingerprints",
+  "properties": [
+    "solubility",
+    "logp",
+    "molecular_weight"
+  ]
+}

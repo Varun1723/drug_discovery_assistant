@@ -1,0 +1,85 @@
+# Production requirements for Drug Discovery Assistant
+# Optimized for GTX 1650 (4GB VRAM) compatibility
+# Install with: pip install -r requirements.txt
+
+# Core Dependencies
+torch==2.0.1+cu118
+torchvision==0.15.2+cu118
+torchaudio==2.0.2+cu118
+--extra-index-url https://download.pytorch.org/whl/cu118
+
+# Web Framework
+streamlit==1.28.1
+streamlit-aggrid==0.3.4
+streamlit-option-menu==0.3.6
+
+# Scientific Computing
+numpy==1.24.4
+pandas==2.0.3
+scipy==1.10.1
+scikit-learn==1.3.2
+matplotlib==3.7.3
+seaborn==0.12.2
+plotly==5.17.0
+
+# Chemistry and Molecular Informatics
+rdkit==2023.3.3
+selfies==2.1.1
+mordred==1.2.0
+
+# Machine Learning
+xgboost==1.7.6
+lightgbm==4.0.0
+deepchem==2.7.1
+tensorflow==2.13.0
+keras==2.13.1
+
+# NLP and Transformers
+transformers==4.35.0
+tokenizers==0.14.1
+datasets==2.14.6
+
+# Molecular Visualization
+py3dmol==2.0.4
+stmol==0.0.9
+
+# Protein Structure
+biotite==0.37.0
+biopython==1.81
+
+# Optimization
+optuna==3.4.0
+bayesian-optimization==1.4.3
+hyperopt==0.2.7
+
+# Memory Management
+psutil==5.9.6
+memory-profiler==0.61.0
+pympler==0.9
+
+# Utilities
+tqdm==4.66.1
+click==8.1.7
+pyyaml==6.0.1
+python-dotenv==1.0.0
+requests==2.31.0
+joblib==1.3.2
+cloudpickle==3.0.0
+h5py==3.9.0
+
+# Development Tools (optional, install with pip install -r requirements-dev.txt)
+# pytest==7.4.3
+# pytest-cov==4.1.0
+# black==23.9.1
+# ruff==0.1.3
+# mypy==1.6.1
+# pre-commit==3.5.0
+
+# API Framework (for optional FastAPI backend)
+# fastapi==0.104.1
+# uvicorn==0.24.0
+# httpx==0.25.0
+
+# GPU Monitoring
+gpustat==1.1.1
+py-cpuinfo==9.0.0

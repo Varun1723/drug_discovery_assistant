@@ -1,0 +1,8 @@
+{
+  "total_molecules": 76,
+  "train_size": 80,
+  "val_size": 10,
+  "test_size": 10,
+  "source": "Generated sample data",
+  "profile": "light"
+}

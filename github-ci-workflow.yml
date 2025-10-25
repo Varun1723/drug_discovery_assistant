@@ -1,0 +1,297 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  PYTHON_VERSION: 3.9
+
+jobs:
+  # Lint and format check
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install black ruff mypy
+        pip install -r requirements.txt
+    
+    - name: Format check with Black
+      run: black --check --diff src/ app/ tests/
+    
+    - name: Lint with Ruff
+      run: ruff check src/ app/ tests/
+    
+    - name: Type check with MyPy
+      run: mypy src/ --ignore-missing-imports
+
+  # Unit tests (CPU only)
+  test-cpu:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.8, 3.9, "3.10"]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential
+    
+    - name: Install CPU-only PyTorch
+      run: |
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-mock
+    
+    - name: Run unit tests
+      run: |
+        pytest tests/ -v --cov=src --cov-report=xml --cov-report=term
+      env:
+        FORCE_CPU: "1"
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+
+  # Integration tests with RDKit
+  test-rdkit:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python with conda
+      uses: conda-incubator/setup-miniconda@v2
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        environment-file: environment.yml
+        activate-environment: drug-discovery
+        auto-activate-base: false
+    
+    - name: Run RDKit integration tests
+      shell: bash -l {0}
+      run: |
+        pytest tests/test_molecular_utils.py -v
+        pytest tests/test_validation.py -v
+      env:
+        FORCE_CPU: "1"
+
+  # Memory efficiency tests
+  test-memory:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        pip install -r requirements.txt
+        pip install pytest memory-profiler psutil
+    
+    - name: Run memory tests
+      run: |
+        pytest tests/test_memory.py -v --profile light
+      env:
+        FORCE_CPU: "1"
+        MAX_MEMORY_GB: "4"
+
+  # Security and safety checks
+  security:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install security tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install bandit safety
+    
+    - name: Security scan with Bandit
+      run: bandit -r src/ -f json -o bandit-report.json || true
+    
+    - name: Safety check
+      run: safety check --json --output safety-report.json || true
+    
+    - name: Upload security reports
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-reports
+        path: |
+          bandit-report.json
+          safety-report.json
+
+  # Documentation build
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install mkdocs mkdocs-material mkdocs-mermaid2-plugin
+    
+    - name: Build documentation
+      run: |
+        mkdocs build --strict
+    
+    - name: Deploy to GitHub Pages
+      if: github.ref == 'refs/heads/main'
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./site
+
+  # Docker build test
+  docker:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        build-type: [gpu, cpu]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Build Docker image (${{ matrix.build-type }})
+      run: |
+        docker build --build-arg BUILD_TYPE=${{ matrix.build-type }} \
+                     -t drug-discovery-${{ matrix.build-type }}:test .
+    
+    - name: Test Docker image
+      run: |
+        docker run --rm drug-discovery-${{ matrix.build-type }}:test \
+               python -c "import src; print('Import test passed')"
+
+  # Performance benchmarks
+  benchmark:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        pip install -r requirements.txt
+        pip install pytest-benchmark
+    
+    - name: Run benchmarks
+      run: |
+        pytest tests/test_benchmarks.py --benchmark-json=benchmark.json
+      env:
+        FORCE_CPU: "1"
+    
+    - name: Store benchmark result
+      uses: benchmark-action/github-action-benchmark@v1
+      with:
+        tool: 'pytest'
+        output-file-path: benchmark.json
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        auto-push: false
+
+  # Integration test with Streamlit
+  streamlit-test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        pip install -r requirements.txt
+        pip install pytest-xvfb selenium
+    
+    - name: Test Streamlit app
+      run: |
+        timeout 30s streamlit run app/main.py --server.headless true &
+        sleep 20
+        curl -f http://localhost:8501 || exit 1
+      env:
+        FORCE_CPU: "1"
+
+  # Deployment readiness check
+  deploy-check:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    needs: [lint, test-cpu, test-rdkit, security, docker]
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Verify all components
+      run: |
+        echo "All tests passed, deployment ready"
+        echo "Components verified:"
+        echo "- Code quality and formatting"
+        echo "- Unit tests (multiple Python versions)"
+        echo "- RDKit integration"
+        echo "- Security scan"
+        echo "- Docker build"
+    
+    - name: Create deployment artifact
+      run: |
+        mkdir -p deployment/
+        cp -r src/ app/ requirements.txt environment.yml Dockerfile deployment/
+        tar -czf drug-discovery-assistant.tar.gz deployment/
+    
+    - name: Upload deployment artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: deployment-package
+        path: drug-discovery-assistant.tar.gz
+        retention-days: 30

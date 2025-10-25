@@ -1,0 +1,19 @@
+{
+  "vocab_size": 1000,
+  "max_length": 128,
+  "pad_token": "[PAD]",
+  "bos_token": "[BOS]",
+  "eos_token": "[EOS]",
+  "unk_token": "[UNK]",
+  "mask_token": "[MASK]",
+  "special_tokens": [
+    "[PAD]",
+    "[BOS]",
+    "[EOS]",
+    "[UNK]",
+    "[MASK]"
+  ],
+  "min_frequency": 2,
+  "model_type": "selfies",
+  "profile": "light"
+}
