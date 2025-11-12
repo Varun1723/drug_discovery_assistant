@@ -490,6 +490,14 @@ class SELFIESTokenizer:
         with open(directory / 'config.json', 'r') as f:
             config_dict = json.load(f)
         
+        # Get all valid field names from the TokenizerConfig dataclass
+        valid_keys = TokenizerConfig.__annotations__.keys()
+
+        # Filter the loaded config dict to only include valid keys
+        filtered_config_dict = {
+        k: v for k, v in config_dict.items() if k in valid_keys
+        }
+
         config = TokenizerConfig(**config_dict)
         
         # Create tokenizer instance

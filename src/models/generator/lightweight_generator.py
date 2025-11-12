@@ -527,7 +527,8 @@ def create_lightweight_generator(
             embedding_dim=256,
             hidden_dim=512,
             num_layers=2,
-            dropout=0.2
+            dropout=0.2,
+            tie_weights=False
         )
     elif profile == "medium":  # 6-8GB VRAM
         return LightweightLSTMGenerator(

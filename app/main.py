@@ -2,6 +2,7 @@
 # Production-ready implementation with GTX 1650 memory optimization
 
 import streamlit as st
+import json
 import sys
 import os
 import warnings

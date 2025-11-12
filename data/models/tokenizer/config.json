@@ -13,7 +13,5 @@
     "[UNK]",
     "[MASK]"
   ],
-  "min_frequency": 2,
-  "model_type": "selfies",
-  "profile": "light"
+  "min_frequency": 2
 }
