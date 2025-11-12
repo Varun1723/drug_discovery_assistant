@@ -11,6 +11,15 @@ from typing import Dict, List, Optional, Any
 import pandas as pd
 import numpy as np
 from pathlib import Path
+# Add src to path
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+import torch  # <-- ADDED
+from c_tokenizers.selfies_tokenizer import SELFIESTokenizer # <-- ADDED
+from models.generator.lightweight_generator import create_lightweight_generator # <-- ADDED
+
+from rdkit import Chem
+from rdkit.Chem import Draw
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -19,9 +28,6 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Add src to path
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 # Page configuration
 st.set_page_config(
@@ -81,7 +87,7 @@ class DrugDiscoveryApp:
             st.session_state.protein_structures = {}
         if 'gpu_available' not in st.session_state:
             # st.session_state.gpu_available = self.check_gpu_availability()
-            st.session_state.gpu_available = False # <-- ADD THIS LINE
+            st.session_state.gpu_available = False # <-- THIS IS YOUR CPU FIX
         if 'memory_mode' not in st.session_state:
             st.session_state.memory_mode = self.determine_memory_mode()
     
@@ -126,7 +132,53 @@ class DrugDiscoveryApp:
                 logger.info("GPU memory optimized for GTX 1650")
         except Exception as e:
             logger.warning(f"Could not optimize GPU memory: {e}")
-    
+
+    # --- NEW FUNCTION TO LOAD YOUR MODEL ---
+    @st.cache_resource
+    def load_generator_model(_self):
+        """Loads the tokenizer and generator model into memory."""
+        TOKENIZER_PATH = Path("data/models/tokenizer")
+        MODEL_PATH = Path("data/models/generator/generator_lstm_best.pt") # <-- Loads your new model
+        CONFIG_PATH = Path("data/models/generator/config.json")
+
+        # Load Tokenizer
+        if not TOKENIZER_PATH.exists():
+            st.error(f"Tokenizer not found at {TOKENIZER_PATH}. Please run 'scripts/download_models.py'.")
+            return None, None, None
+        tokenizer = SELFIESTokenizer.load(TOKENIZER_PATH)
+        
+        # Load Model
+        if not MODEL_PATH.exists():
+            st.warning("Trained model not found. Please train a model first using 'scripts/train_generator.py'. App is in DEMO MODE.")
+            return tokenizer, None, None
+            
+        try:
+            # We need to load the config to know the model's structure
+            with open(CONFIG_PATH, 'r') as f:
+                model_config = json.load(f)
+            
+            model = create_lightweight_generator(
+                vocab_size=len(tokenizer),
+                profile=model_config.get("profile", "light"),
+                # tie_weights=False # <-- The fix we found earlier
+            )
+            
+            # Load the saved model weights (handle CPU/GPU)
+            # We force CPU mode since that's what we trained with
+            device = 'cpu'
+
+            checkpoint = torch.load(MODEL_PATH, map_location=torch.device('cpu'))
+            model.load_state_dict(checkpoint['model_state_dict'])      
+
+            model.to(device)
+            model.eval()
+            st.success("Loaded trained generator model!")
+            return tokenizer, model, device
+        except Exception as e:
+            st.error(f"Error loading model: {e}. Falling back to Demo Mode.")
+            st.exception(e) # Show the full error
+            return tokenizer, None, None
+
     def render_header(self):
         """Render the application header."""
         col1, col2, col3 = st.columns([1, 2, 1])
@@ -254,88 +306,134 @@ class DrugDiscoveryApp:
         with col4:
             memory_mode = st.session_state.memory_mode.upper()
             st.metric("Memory Mode", memory_mode)
-    
+
+    # --- THIS ENTIRE FUNCTION IS REPLACED ---
     def render_generator_page(self):
         """Render the molecule generator page."""
         st.markdown("## 🧪 Molecule Generator")
         
-        # Model selection
+        # --- (Dropdowns and sliders) ---
         col1, col2 = st.columns([1, 1])
-        
         with col1:
             model_type = st.selectbox(
                 "Select Generator Model:",
-                ["Lightweight LSTM", "Small Transformer", "GPT-2 Fine-tuned"],
+                ["Lightweight LSTM"], # Only show what we have
                 help="Lightweight models are optimized for GTX 1650"
             )
-            
-            if st.session_state.memory_mode == "light" and model_type != "Lightweight LSTM":
-                st.warning("⚠️ Consider using Lightweight LSTM for GTX 1650 compatibility")
-        
         with col2:
             tokenizer_type = st.selectbox(
                 "Tokenization Method:",
-                ["SELFIES", "SMILES Character-level", "SMILES BPE"],
+                ["SELFIES"], # Only show what we have
                 help="SELFIES provides more robust molecule representation"
             )
-        
-        # Generation parameters
         st.markdown("### Generation Parameters")
         col1, col2, col3 = st.columns(3)
-        
         with col1:
             num_molecules = st.slider("Number of molecules", 1, 100, 10)
             temperature = st.slider("Temperature", 0.1, 2.0, 1.0, 0.1)
-        
         with col2:
             top_k = st.slider("Top-k", 1, 100, 50)
             top_p = st.slider("Top-p", 0.1, 1.0, 0.9, 0.05)
-        
         with col3:
             max_length = st.slider("Max length", 50, 500, 150)
             seed = st.number_input("Random seed", 0, 999999, 42)
         
-        # Memory optimization settings
-        if st.session_state.memory_mode == "light":
-            with st.expander("🔧 Memory Optimization (GTX 1650)"):
-                batch_size = st.slider("Batch size", 1, 4, 1, help="Small batches for 4GB VRAM")
-                use_mixed_precision = st.checkbox("Use mixed precision", True)
-                clear_cache = st.checkbox("Clear cache after generation", True)
-                st.info("These settings optimize memory usage for GTX 1650")
-        
-        # Generation button
+        # --- (This is the NEW "Generate Molecules" button logic) ---
         if st.button("🧪 Generate Molecules", type="primary"):
+            # Load the model and tokenizer
+            tokenizer, model, device = self.load_generator_model()
+            
+            if tokenizer is None:
+                st.stop() # Stop if tokenizer failed to load
+
             with st.spinner("Generating molecules..."):
                 try:
-                    # Placeholder for actual generation logic
-                    st.success(f"Generated {num_molecules} molecules successfully!")
+                    generated_molecules = []
                     
-                    # Sample generated molecules (placeholder)
-                    sample_molecules = [
-                        "CCO",
-                        "CC(=O)OC1=CC=CC=C1C(=O)O", 
-                        "CN1C=NC2=C1C(=O)N(C(=O)N2C)C"
-                    ]
+                    if model is None:
+                        # --- DEMO MODE FALLBACK ---
+                        st.warning("Running in Demo Mode. Molecules are placeholders.")
+                        generated_molecules = [
+                            "CCO", "CC(=O)O", "C1=CC=CC=C1",
+                            "CC(=O)OC1=CC=CC=C1C(=O)O", 
+                            "CN1C=NC2=C1C(=O)N(C(=O)N2C)C"
+                        ]
+                        generated_molecules = generated_molecules[:num_molecules]
+                    else:
+                        # --- REAL MODEL LOGIC ---
+                        generated_molecules = model.generate(
+                            tokenizer=tokenizer,
+                            num_samples=num_molecules,
+                            max_length=max_length,
+                            temperature=temperature,
+                            top_k=top_k,
+                            top_p=top_p,
+                            device=device,
+                            seed=seed
+                        )
+                        st.success(f"Generated {num_molecules} real molecules!")
+                    
+                    # Store in session state
+                    st.session_state.generated_molecules = generated_molecules
                     
                     # Display generated molecules
                     st.markdown("### Generated Molecules")
-                    for i, smiles in enumerate(sample_molecules[:3]):  # Show first 3
+                    if not generated_molecules:
+                        st.info("No molecules generated. Try different parameters.")
+                        
+                    for i, mol_str in enumerate(generated_molecules):
+                        st.markdown("---")
                         col1, col2, col3 = st.columns([2, 1, 1])
+                        
+                        # Convert SELFIES to SMILES for RDKit
+                        smiles = tokenizer.selfies_to_smiles(mol_str) if tokenizer else "N/A"
+                        if not smiles:
+                            smiles = "Invalid SELFIES"
+
                         with col1:
-                            st.code(smiles, language="text")
+                            st.code(mol_str, language="text") # Display SELFIES
+                        
                         with col2:
-                            st.button(f"Visualize {i+1}", key=f"viz_{i}")
+                            # When "Analyze" is clicked, store the SMILES and go to the predictor
+                            if st.button(f"Analyze {i+1}", key=f"analyze_{i}"):
+                                st.session_state.smiles_to_analyze = smiles
+                                st.warning("Molecule sent to 'Property Prediction' page. Please navigate there now.")
+                        
                         with col3:
-                            st.button(f"Analyze {i+1}", key=f"analyze_{i}")
-                
+                            # We need a unique key for the visualize button
+                            viz_key = f"viz_{i}"
+                        
+                        # Add an expander for the visual
+                        with st.expander(f"Visualize SMILES for Molecule {i+1}"):
+                            if smiles == "N/A" or smiles == "Invalid SELFIES":
+                                st.warning(f"Could not convert SELFIES to SMILES: {mol_str}")
+                            else:
+                                st.markdown(f"**SMILES:** `{smiles}`")
+                                try:
+                                    mol = Chem.MolFromSmiles(smiles)
+                                    if mol:
+                                        st.image(Draw.MolToImage(mol))
+                                    else:
+                                        st.warning("Cannot generate image: Invalid SMILES.")
+                                except Exception as e:
+                                    st.error(f"RDKit error: {e}")
+
                 except Exception as e:
                     st.error(f"Generation failed: {str(e)}")
-                    if st.session_state.memory_mode == "light":
-                        st.info("Try reducing batch size or using CPU mode for debugging")
+                    st.exception(e) # Show full error
     
     def render_predictor_page(self):
         """Render the property prediction page."""
         st.markdown("## 📊 Property Prediction")
+
+        # --- START OF NEW CODE ---
+        # Check if a molecule was sent from the generator page
+        default_smiles = ""
+        if "smiles_to_analyze" in st.session_state:
+            default_smiles = st.session_state.smiles_to_analyze
+            # Clear the state so it's not sticky
+            del st.session_state.smiles_to_analyze
+        # --- END OF NEW CODE ---
         
         # Input methods
         input_method = st.radio(
@@ -347,8 +445,10 @@ class DrugDiscoveryApp:
         molecules_to_predict = []
         
         if input_method == "Single SMILES":
+            # --- MODIFIED LINE ---
             smiles_input = st.text_input(
                 "Enter SMILES:",
+                value=default_smiles,  # <-- Set the value from our new code
                 placeholder="CCO",
                 help="Enter a valid SMILES string"
             )
@@ -373,6 +473,8 @@ class DrugDiscoveryApp:
                 molecules_to_predict = selected_molecules
             else:
                 st.info("No generated molecules available. Generate some first!")
+        
+        # --- (The rest of the function is identical) ---
         
         # Property selection
         st.markdown("### Properties to Predict")

@@ -254,6 +254,12 @@ class LightweightLSTMGenerator(nn.Module):
                     
                     # Get last token logits
                     next_token_logits = logits[:, -1, :] / temperature
+
+                    # --- START OF FIX 1 ---
+                    # Ensure top_k is not larger than vocab size
+                    if top_k > 0:
+                        top_k = min(top_k, self.vocab_size)
+                    # --- END OF FIX 1 ---
                     
                     # Apply top-k filtering
                     if top_k > 0:
@@ -262,7 +268,11 @@ class LightweightLSTMGenerator(nn.Module):
                         next_token_logits.scatter_(1, top_k_indices, top_k_logits)
                     
                     # Apply nucleus (top-p) filtering
-                    if top_p < 1.0:
+                    # --- START OF FIX 2 ---
+                    # Apply nucleus (top-p) filtering
+                    # Disable top_p if top_k is active, as they can conflict on small vocabs
+                    if top_p < 1.0 and top_k == 0:
+                    # --- END OF FIX 2 ---
                         sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
                         cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
                         
