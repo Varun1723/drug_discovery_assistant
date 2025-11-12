@@ -603,7 +603,7 @@ def validate_generated_molecules(
 
 if __name__ == "__main__":
     # Example usage
-    from selfies_tokenizer import train_selfies_tokenizer
+    from ...c_tokenizers.selfies_tokenizer import train_selfies_tokenizer
     
     # Sample training data
     sample_molecules = [

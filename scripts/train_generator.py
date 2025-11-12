@@ -19,7 +19,8 @@ from torch.utils.data import DataLoader
 
 # Setup paths
 project_root = Path(__file__).parent.parent
-sys.path.append(str(project_root / 'src'))
+# sys.path.append(str(project_root / 'src'))
+sys.path.insert(0, str(project_root / 'src'))
 
 # Setup logging
 logging.basicConfig(
@@ -89,7 +90,7 @@ def train_generator(
     logger.info(f"Loading tokenizer from {tokenizer_path}")
     
     try:
-        from tokenizers.selfies_tokenizer import SELFIESTokenizer
+        from c_tokenizers.selfies_tokenizer import SELFIESTokenizer
         tokenizer = SELFIESTokenizer.load(tokenizer_path)
         logger.info(f"Tokenizer loaded with vocab size: {len(tokenizer)}")
     except Exception as e:
