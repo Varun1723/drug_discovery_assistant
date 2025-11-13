@@ -24,6 +24,10 @@ import joblib
 from rdkit import Chem
 from rdkit.Chem import AllChem, Descriptors
 
+from rdkit.Chem import RDConfig
+sys.path.append(os.path.join(RDConfig.RDContribDir, 'SA_Score'))
+# Note: SAScore is tricky to import in some envs.
+
 # Suppress warnings for cleaner output
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -219,6 +223,28 @@ class DrugDiscoveryApp:
         if mol:
             return np.array(AllChem.GetMorganFingerprintAsBitVect(mol, 2, nBits=2048)).reshape(1, -1)
         return None
+
+    def check_lipinski(self, mol):
+        """Check Lipinski's Rule of 5."""
+        mw = Descriptors.MolWt(mol)
+        logp = Descriptors.MolLogP(mol)
+        hbd = Descriptors.NumHDonors(mol)
+        hba = Descriptors.NumHAcceptors(mol)
+
+        violations = 0
+        if mw > 500: violations += 1
+        if logp > 5: violations += 1
+        if hbd > 5: violations += 1
+        if hba > 10: violations += 1
+
+        return {
+            "MW": (mw, mw <= 500),
+            "LogP": (logp, logp <= 5),
+            "HBD": (hbd, hbd <= 5),
+            "HBA": (hba, hba <= 10),
+            "Violations": violations,
+            "Pass": violations <= 1
+        }
 
     def render_header(self):
         """Render the application header."""
@@ -615,7 +641,73 @@ class DrugDiscoveryApp:
                 except Exception as e:
                     st.error(f"Prediction failed: {str(e)}")
                     st.exception(e)
-                    
+
+    def render_toxicity_page(self):
+        """Render the detailed safety analysis page."""
+        st.markdown("## 🛡️ Safety & Toxicity Analysis")
+
+        # Get molecules from session state
+        if 'generated_molecules' not in st.session_state or not st.session_state.generated_molecules:
+            st.info("No molecules to analyze. Please go to 'Molecule Generator' first.")
+            return
+
+        # Load tokenizer to convert SELFIES -> SMILES
+        tokenizer, _, _ = self.load_generator_model()
+        if not tokenizer:
+            st.error("Tokenizer failed to load.")
+            return
+
+        # Dropdown to select a molecule
+        smiles_list = [tokenizer.selfies_to_smiles(s) for s in st.session_state.generated_molecules]
+        selected_smiles = st.selectbox("Select a molecule to analyze:", smiles_list)
+
+        if selected_smiles:
+            col1, col2 = st.columns([1, 2])
+
+            with col1:
+                st.markdown("### Structure")
+                mol = Chem.MolFromSmiles(selected_smiles)
+                if mol:
+                    st.image(Draw.MolToImage(mol), caption=selected_smiles)
+                else:
+                    st.error("Invalid Molecule")
+
+            with col2:
+                st.markdown("### 🚦 Lipinski's Rule of 5")
+                if mol:
+                    rules = self.check_lipinski(mol)
+
+                    # Display rules as metrics
+                    r1, r2 = st.columns(2)
+                    r1.metric("Molecular Weight", f"{rules['MW'][0]:.1f}", "≤ 500" if rules['MW'][1] else "Fail", delta_color="normal" if rules['MW'][1] else "inverse")
+                    r2.metric("LogP", f"{rules['LogP'][0]:.1f}", "≤ 5" if rules['LogP'][1] else "Fail", delta_color="normal" if rules['LogP'][1] else "inverse")
+
+                    r3, r4 = st.columns(2)
+                    r3.metric("H-Bond Donors", rules['HBD'][0], "≤ 5" if rules['HBD'][1] else "Fail", delta_color="normal" if rules['HBD'][1] else "inverse")
+                    r4.metric("H-Bond Acceptors", rules['HBA'][0], "≤ 10" if rules['HBA'][1] else "Fail", delta_color="normal" if rules['HBA'][1] else "inverse")
+
+                    if rules['Pass']:
+                        st.success(f"✅ Drug-like! (Violations: {rules['Violations']})")
+                    else:
+                        st.warning(f"⚠️ Not Drug-like (Violations: {rules['Violations']})")
+
+                st.markdown("### ☠️ Toxicity Model Prediction")
+                # Re-run the toxicity model for this single molecule
+                tox_path = Path("data/models/predictor_toxicity/toxicity_xgb_model.pkl")
+                if tox_path.exists():
+                    model = joblib.load(tox_path)
+                    fp = self.get_fingerprint(selected_smiles)
+                    if fp is not None:
+                        pred = model.predict(fp)[0]
+                        probs = model.predict_proba(fp)[0]
+
+                        if pred == 1:
+                            st.error(f"**Prediction: TOXIC** (Confidence: {probs[1]:.1%})")
+                        else:
+                            st.success(f"**Prediction: SAFE** (Confidence: {probs[0]:.1%})")
+                else:
+                    st.info("Toxicity model not trained.")
+
     def render_protein_page(self):
         """Render the protein structure prediction page."""
         st.markdown("## 🧬 Protein Structure Prediction")
@@ -805,6 +897,8 @@ class DrugDiscoveryApp:
                 self.render_generator_page()
             elif selected_page == "predictor":
                 self.render_predictor_page()
+            elif selected_page == "toxicity":
+                self.render_toxicity_page()
             elif selected_page == "protein":
                 self.render_protein_page()
             elif selected_page == "settings":
