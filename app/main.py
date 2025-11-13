@@ -28,6 +28,10 @@ from rdkit.Chem import RDConfig
 sys.path.append(os.path.join(RDConfig.RDContribDir, 'SA_Score'))
 # Note: SAScore is tricky to import in some envs.
 
+import requests
+import py3Dmol
+from stmol import showmol
+
 # Suppress warnings for cleaner output
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -711,19 +715,20 @@ class DrugDiscoveryApp:
     def render_protein_page(self):
         """Render the protein structure prediction page."""
         st.markdown("## 🧬 Protein Structure Prediction")
+
+        # API URL for ESMFold
+        ESMFOLD_API_URL = "https://api.esmatlas.com/foldSequence/v1/pdb/"
         
-        # Mode selection
         mode = st.radio(
             "Prediction Mode:",
             ["API Mode (Recommended)", "Local Mode (>8GB VRAM)"],
-            help="API mode is recommended for GTX 1650"
+            help="API mode is recommended for GTX 1650/CPU-only"
         )
         
-        if mode == "Local Mode (>8GB VRAM)" and st.session_state.memory_mode == "light":
-            st.error("❌ Local ESMFold requires >8GB VRAM. Your system has ~4GB. Please use API mode.")
+        if mode == "Local Mode (>8GB VRAM)":
+            st.error("❌ Local Mode is not implemented in this version. Please use API mode.")
             return
         
-        # Sequence input
         sequence_input = st.text_area(
             "Protein Sequence (amino acids):",
             placeholder="MGSSHHHHHHSSGLVPRGSHMRGPNPTAASLEASAGPFTVRSFTVSRPSGYGAG...",
@@ -731,58 +736,118 @@ class DrugDiscoveryApp:
             help="Enter protein sequence in single-letter amino acid code"
         )
         
-        # Advanced options
         with st.expander("🔧 Advanced Options"):
-            if mode == "API Mode (Recommended)":
-                timeout = st.slider("API Timeout (seconds)", 30, 300, 120)
-                cache_results = st.checkbox("Cache results", True)
-            else:
-                batch_size = st.slider("Batch size", 1, 2, 1)
-                use_half_precision = st.checkbox("Half precision (FP16)", True)
-        
-        # Prediction button
+            timeout = st.slider("API Timeout (seconds)", 30, 300, 120)
+
         if st.button("🧬 Predict Structure", type="primary") and sequence_input:
-            with st.spinner("Predicting protein structure..."):
+            
+            # Clean up sequence
+            sequence = "".join(sequence_input.split())
+            if not sequence:
+                st.warning("Please enter a protein sequence.")
+                return
+
+            with st.spinner(f"Predicting structure for {len(sequence)} residues... (This can take a few minutes)"):
                 try:
-                    if mode == "API Mode (Recommended)":
+                    # --- REAL API CALL ---
+                    headers = {'Content-Type': 'text/plain'}
+                    response = requests.post(ESMFOLD_API_URL, data=sequence, headers=headers, timeout=timeout)
+                    
+                    if response.status_code == 200:
+                        pdb_string = response.text
                         st.success("✅ Structure predicted successfully via API!")
-                    else:
-                        st.success("✅ Structure predicted locally!")
-                    
-                    # Placeholder for structure visualization
-                    st.markdown("### 3D Structure Visualization")
-                    st.info("📊 Structure visualization would appear here using Py3Dmol")
-                    
-                    # Confidence metrics
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("plDDT Score", "78.5", help="Per-residue confidence score")
-                    with col2:
-                        st.metric("Sequence Length", len(sequence_input.replace('\n', '').replace(' ', '')))
-                    with col3:
-                        st.metric("Prediction Time", "45s")
-                    
-                    # Download options
-                    col1, col2 = st.columns(2)
-                    with col1:
+                        
+                        # --- 3D VISUALIZATION ---
+                        st.markdown("### 3D Structure Visualization")
+
+                        # Add controls for the user
+                        style_options = st.multiselect(
+                            "Visualization Styles:",
+                            ["Cartoon (Ribbon)", "Stick (Bonds)", "Sphere (Atoms)", "Surface"],
+                            default=["Cartoon (Ribbon)"]
+                        )
+
+                        color_style = st.radio(
+                            "Color Scheme:",
+                            ["Confidence (pLDDT)", "Spectrum (Rainbow)", "Chain"],
+                            horizontal=True
+                        )
+
+                        # Create the viewer
+                        view = py3Dmol.view(width=800, height=600)
+                        view.addModel(pdb_string, 'pdb')
+
+                        # Apply selected styles
+                        if "Cartoon (Ribbon)" in style_options:
+                            if color_style == "Confidence (pLDDT)":
+                                # Color by B-factor (pLDDT score): Red(0) -> Blue(100)
+                                view.setStyle({'cartoon': {'colorscheme': {'prop':'b','gradient':'roygb','min':50,'max':90}}})
+                            elif color_style == "Spectrum (Rainbow)":
+                                view.setStyle({'cartoon': {'color': 'spectrum'}})
+                            else:
+                                view.setStyle({'cartoon': {'color': 'chain'}})
+
+                        if "Stick (Bonds)" in style_options:
+                            view.addStyle({'stick': {}})
+
+                        if "Sphere (Atoms)" in style_options:
+                            view.addStyle({'sphere': {'scale': 0.3}})
+
+                        if "Surface" in style_options:
+                            view.addSurface(py3Dmol.SES, {'opacity': 0.8})
+
+                        view.zoomTo()
+                        view.spin(True) # Auto-spin makes it look cooler
+
+                        # Display
+                        showmol(view, height=600, width=800)
+                            
+                        # Use py3Dmol to render
+                        view = py3Dmol.view(width=800, height=600)
+                        view.addModel(pdb_string, 'pdb')
+                        view.setStyle({'cartoon': {'color': 'spectrum'}})
+                        view.zoomTo()
+                        
+                        # Display with stmol
+                        showmol(view, height=600, width=800)
+                        
+                        # --- CONFIDENCE METRICS ---
+                        # Parse PDB string for confidence (plDDT)
+                        avg_plddt = 0
+                        count = 0
+                        for line in pdb_string.split('\n'):
+                            if line.startswith("ATOM"):
+                                try:
+                                    # The plDDT score is in the B-factor column
+                                    plddt = float(line[60:66])
+                                    avg_plddt += plddt
+                                    count += 1
+                                except:
+                                    pass
+                        
+                        if count > 0:
+                            avg_plddt /= count
+                        
+                        st.markdown("### 📊 Confidence Metrics")
+                        col1, col2 = st.columns(2)
+                        col1.metric("Average plDDT Score", f"{avg_plddt:.2f}", help="Per-residue confidence (0-100). Higher is better.")
+                        col2.metric("Sequence Length", len(sequence))
+                        
+                        # --- DOWNLOAD ---
                         st.download_button(
                             "📥 Download PDB",
-                            data="# Placeholder PDB data",
+                            data=pdb_string,
                             file_name="predicted_structure.pdb",
                             mime="chemical/x-pdb"
                         )
-                    with col2:
-                        st.download_button(
-                            "📥 Download Confidence",
-                            data="# Placeholder confidence data",
-                            file_name="confidence_scores.csv",
-                            mime="text/csv"
-                        )
-                
+                    else:
+                        st.error(f"API Error (Status {response.status_code}): {response.text}")
+
+                except requests.exceptions.RequestException as e:
+                    st.error(f"Failed to connect to ESMFold API: {e}")
                 except Exception as e:
                     st.error(f"Structure prediction failed: {str(e)}")
-                    if mode == "Local Mode (>8GB VRAM)":
-                        st.info("💡 Try API mode instead")
+                    st.exception(e)
     
     def render_settings_page(self):
         """Render the settings page."""
