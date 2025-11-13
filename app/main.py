@@ -20,6 +20,9 @@ from models.generator.lightweight_generator import create_lightweight_generator 
 
 from rdkit import Chem
 from rdkit.Chem import Draw
+import joblib
+from rdkit import Chem
+from rdkit.Chem import AllChem, Descriptors
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -178,6 +181,44 @@ class DrugDiscoveryApp:
             st.error(f"Error loading model: {e}. Falling back to Demo Mode.")
             st.exception(e) # Show the full error
             return tokenizer, None, None
+
+    @st.cache_resource
+    def load_predictor_model(_self, model_name: str):
+        """Loads a pre-trained predictor model."""
+        MODEL_PATH = Path(f"data/models/{model_name}/solubility_xgb_model.pkl")
+
+        if not MODEL_PATH.exists():
+            st.warning(f"Predictor model not found at {MODEL_PATH}. Please run 'scripts/train_predictor.py'.")
+            return None
+
+        try:
+            model = joblib.load(MODEL_PATH)
+            st.success(f"Loaded predictor model: {model_name}")
+            return model
+        except Exception as e:
+            st.error(f"Error loading predictor model: {e}")
+            return None
+
+    def get_rdkit_properties(self, smiles: str):
+        """Calculate basic properties using RDKit."""
+        try:
+            mol = Chem.MolFromSmiles(smiles)
+            if not mol:
+                return {"MW": "Invalid", "LogP": "Invalid", "TPSA": "Invalid"}
+
+            mw = Descriptors.MolWt(mol)
+            logp = Descriptors.MolLogP(mol)
+            tpsa = Descriptors.TPSA(mol)
+            return {"MW": mw, "LogP": logp, "TPSA": tpsa}
+        except Exception:
+            return {"MW": "Error", "LogP": "Error", "TPSA": "Error"}
+
+    def get_fingerprint(self, smiles: str):
+        """Convert SMILES to Morgan Fingerprint for model prediction."""
+        mol = Chem.MolFromSmiles(smiles)
+        if mol:
+            return np.array(AllChem.GetMorganFingerprintAsBitVect(mol, 2, nBits=2048)).reshape(1, -1)
+        return None
 
     def render_header(self):
         """Render the application header."""
@@ -426,36 +467,32 @@ class DrugDiscoveryApp:
         """Render the property prediction page."""
         st.markdown("## 📊 Property Prediction")
 
-        # --- START OF NEW CODE ---
-        # Check if a molecule was sent from the generator page
         default_smiles = ""
         if "smiles_to_analyze" in st.session_state:
             default_smiles = st.session_state.smiles_to_analyze
-            # Clear the state so it's not sticky
             del st.session_state.smiles_to_analyze
-        # --- END OF NEW CODE ---
-        
-        # Input methods
+
         input_method = st.radio(
             "Input method:",
             ["Single SMILES", "Batch Upload", "From Generated"],
-            horizontal=True
+            horizontal=True,
+            key="predictor_input_method" # Added a key to help state
         )
-        
+
         molecules_to_predict = []
-        
+
         if input_method == "Single SMILES":
-            # --- MODIFIED LINE ---
             smiles_input = st.text_input(
                 "Enter SMILES:",
-                value=default_smiles,  # <-- Set the value from our new code
+                value=default_smiles,
                 placeholder="CCO",
                 help="Enter a valid SMILES string"
             )
             if smiles_input:
                 molecules_to_predict = [smiles_input]
-        
+
         elif input_method == "Batch Upload":
+            # (Logic unchanged)
             uploaded_file = st.file_uploader(
                 "Upload CSV/SDF file:",
                 type=['csv', 'sdf'],
@@ -463,79 +500,110 @@ class DrugDiscoveryApp:
             )
             if uploaded_file:
                 st.info("File uploaded successfully!")
-        
+
         elif input_method == "From Generated":
+            # Logic updated to convert SELFIES to SMILES
             if st.session_state.generated_molecules:
-                selected_molecules = st.multiselect(
-                    "Select molecules:",
-                    st.session_state.generated_molecules
-                )
-                molecules_to_predict = selected_molecules
+                tokenizer, _, _ = self.load_generator_model()
+                if tokenizer:
+                    smiles_options = [tokenizer.selfies_to_smiles(s) for s in st.session_state.generated_molecules]
+                    selected_smiles = st.multiselect(
+                        "Select molecules (SMILES):",
+                        smiles_options
+                    )
+                    molecules_to_predict = selected_smiles
+                else:
+                    st.error("Tokenizer not loaded, cannot convert generated molecules.")
             else:
                 st.info("No generated molecules available. Generate some first!")
-        
-        # --- (The rest of the function is identical) ---
-        
-        # Property selection
+
+        # --- (Property selection logic) ---
         st.markdown("### Properties to Predict")
         col1, col2 = st.columns(2)
-        
+
+        # This dictionary will store the user's choices
+        properties_to_run = {}
+
         with col1:
-            properties = {
-                "Solubility": st.checkbox("Aqueous Solubility", True),
-                "LogP": st.checkbox("Lipophilicity (LogP)", True),
-                "MW": st.checkbox("Molecular Weight", True),
-                "TPSA": st.checkbox("Topological PSA", False)
-            }
-        
+            properties_to_run["Solubility"] = st.checkbox("Aqueous Solubility (ML Model)", True)
+            properties_to_run["LogP"] = st.checkbox("Lipophilicity (LogP) (RDKit)", True)
+            properties_to_run["MW"] = st.checkbox("Molecular Weight (RDKit)", True)
+            properties_to_run["TPSA"] = st.checkbox("Topological PSA (RDKit)", False)
+
         with col2:
-            advanced_props = {
-                "Toxicity": st.checkbox("Toxicity Classification", False),
-                "Bioavailability": st.checkbox("Oral Bioavailability", False),
-                "BBB": st.checkbox("Blood-Brain Barrier", False),
-                "CYP": st.checkbox("CYP Inhibition", False)
-            }
-        
-        # Model selection
+            # These are placeholders for now
+            properties_to_run["Toxicity"] = st.checkbox("Toxicity Classification", False)
+            properties_to_run["Bioavailability"] = st.checkbox("Oral Bioavailability", False)
+            properties_to_run["BBB"] = st.checkbox("Blood-Brain Barrier", False)
+            properties_to_run["CYP"] = st.checkbox("CYP Inhibition", False)
+
+        # --- (Model selection logic) ---
         predictor_model = st.selectbox(
             "Prediction Model:",
-            ["Fingerprint + XGBoost (Fast)", "Graph Neural Network", "DeepChem Multi-task"],
+            ["Fingerprint + XGBoost (Fast)"], # Only show what we have
             help="Fingerprint models are faster and more memory-efficient"
         )
-        
-        if st.session_state.memory_mode == "light" and "Graph Neural Network" in predictor_model:
-            st.warning("⚠️ Consider using Fingerprint + XGBoost for better GTX 1650 compatibility")
-        
-        # Prediction button
+
+        # --- (NEW Prediction button logic) ---
         if st.button("📊 Predict Properties", type="primary") and molecules_to_predict:
+
+            # Load the AI model if needed
+            solubility_model = None
+            if properties_to_run["Solubility"]:
+                solubility_model = self.load_predictor_model("predictor_solubility")
+
             with st.spinner("Predicting properties..."):
                 try:
-                    # Placeholder for actual prediction logic
-                    results = {}
-                    for mol in molecules_to_predict:
-                        results[mol] = {
-                            "Solubility": np.random.uniform(-5, 0),
-                            "LogP": np.random.uniform(-2, 5),
-                            "MW": np.random.uniform(100, 500),
-                            "TPSA": np.random.uniform(20, 150)
-                        }
-                    
-                    # Display results
+                    results_list = []
+
+                    for smiles in molecules_to_predict:
+                        if not smiles:
+                            continue
+
+                        mol_results = {"Molecule": smiles}
+
+                        # --- 1. Get RDKit Properties ---
+                        rdkit_props = self.get_rdkit_properties(smiles)
+                        if properties_to_run["MW"]:
+                            mol_results["MW"] = rdkit_props.get("MW", "N/A")
+                        if properties_to_run["LogP"]:
+                            mol_results["LogP"] = rdkit_props.get("LogP", "N/A")
+                        if properties_to_run["TPSA"]:
+                            mol_results["TPSA"] = rdkit_props.get("TPSA", "N/A")
+
+                        # --- 2. Get AI Model Properties ---
+                        if properties_to_run["Solubility"] and solubility_model:
+                            fp = self.get_fingerprint(smiles)
+                            if fp is not None:
+                                pred = solubility_model.predict(fp)
+                                mol_results["Solubility"] = pred[0]
+                            else:
+                                mol_results["Solubility"] = "Error"
+
+                        # --- (Add other models here) ---
+
+                        results_list.append(mol_results)
+
+                    # --- Display results ---
                     st.markdown("### Prediction Results")
-                    df = pd.DataFrame(results).T
-                    st.dataframe(df, use_container_width=True)
-                    
-                    # Download button
-                    csv = df.to_csv()
-                    st.download_button(
-                        label="📥 Download Results (CSV)",
-                        data=csv,
-                        file_name="property_predictions.csv",
-                        mime="text/csv"
-                    )
-                    
+                    if not results_list:
+                        st.warning("No valid molecules to predict.")
+                    else:
+                        df = pd.DataFrame(results_list)
+                        st.dataframe(df, use_container_width=True)
+
+                        # Download button
+                        csv = df.to_csv(index=False)
+                        st.download_button(
+                            label="📥 Download Results (CSV)",
+                            data=csv,
+                            file_name="property_predictions.csv",
+                            mime="text/csv"
+                        )
+
                 except Exception as e:
                     st.error(f"Prediction failed: {str(e)}")
+                    st.exception(e)
     
     def render_protein_page(self):
         """Render the protein structure prediction page."""
