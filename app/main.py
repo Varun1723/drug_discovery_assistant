@@ -470,17 +470,17 @@ class DrugDiscoveryApp:
         default_smiles = ""
         if "smiles_to_analyze" in st.session_state:
             default_smiles = st.session_state.smiles_to_analyze
-            del st.session_state.smiles_to_analyze
+            # del st.session_state.smiles_to_analyze # Keep commented out to persist data
 
         input_method = st.radio(
             "Input method:",
             ["Single SMILES", "Batch Upload", "From Generated"],
             horizontal=True,
-            key="predictor_input_method" # Added a key to help state
+            key="predictor_input_method"
         )
-
+        
         molecules_to_predict = []
-
+        
         if input_method == "Single SMILES":
             smiles_input = st.text_input(
                 "Enter SMILES:",
@@ -490,9 +490,8 @@ class DrugDiscoveryApp:
             )
             if smiles_input:
                 molecules_to_predict = [smiles_input]
-
+        
         elif input_method == "Batch Upload":
-            # (Logic unchanged)
             uploaded_file = st.file_uploader(
                 "Upload CSV/SDF file:",
                 type=['csv', 'sdf'],
@@ -500,9 +499,8 @@ class DrugDiscoveryApp:
             )
             if uploaded_file:
                 st.info("File uploaded successfully!")
-
+        
         elif input_method == "From Generated":
-            # Logic updated to convert SELFIES to SMILES
             if st.session_state.generated_molecules:
                 tokenizer, _, _ = self.load_generator_model()
                 if tokenizer:
@@ -513,56 +511,63 @@ class DrugDiscoveryApp:
                     )
                     molecules_to_predict = selected_smiles
                 else:
-                    st.error("Tokenizer not loaded, cannot convert generated molecules.")
+                    st.error("Tokenizer not loaded.")
             else:
                 st.info("No generated molecules available. Generate some first!")
-
-        # --- (Property selection logic) ---
+        
+        # --- Property Selection ---
         st.markdown("### Properties to Predict")
         col1, col2 = st.columns(2)
-
-        # This dictionary will store the user's choices
+        
         properties_to_run = {}
-
+        
         with col1:
             properties_to_run["Solubility"] = st.checkbox("Aqueous Solubility (ML Model)", True)
             properties_to_run["LogP"] = st.checkbox("Lipophilicity (LogP) (RDKit)", True)
             properties_to_run["MW"] = st.checkbox("Molecular Weight (RDKit)", True)
             properties_to_run["TPSA"] = st.checkbox("Topological PSA (RDKit)", False)
-
+        
         with col2:
-            # These are placeholders for now
-            properties_to_run["Toxicity"] = st.checkbox("Toxicity Classification", False)
+            properties_to_run["Toxicity"] = st.checkbox("Toxicity Classification (ML Model)", False)
+            # These remain placeholders for now
             properties_to_run["Bioavailability"] = st.checkbox("Oral Bioavailability", False)
             properties_to_run["BBB"] = st.checkbox("Blood-Brain Barrier", False)
             properties_to_run["CYP"] = st.checkbox("CYP Inhibition", False)
-
-        # --- (Model selection logic) ---
+        
         predictor_model = st.selectbox(
             "Prediction Model:",
-            ["Fingerprint + XGBoost (Fast)"], # Only show what we have
+            ["Fingerprint + XGBoost (Fast)"],
             help="Fingerprint models are faster and more memory-efficient"
         )
-
-        # --- (NEW Prediction button logic) ---
+        
+        # --- PREDICTION LOGIC ---
         if st.button("📊 Predict Properties", type="primary") and molecules_to_predict:
-
-            # Load the AI model if needed
+            
+            # 1. Load Solubility Model
             solubility_model = None
             if properties_to_run["Solubility"]:
                 solubility_model = self.load_predictor_model("predictor_solubility")
 
+            # 2. Load Toxicity Model (THIS IS NEW)
+            toxicity_model = None
+            if properties_to_run["Toxicity"]:
+                tox_path = Path("data/models/predictor_toxicity/toxicity_xgb_model.pkl")
+                if tox_path.exists():
+                    toxicity_model = joblib.load(tox_path)
+                else:
+                    st.warning("Toxicity model not found. Please run 'scripts/train_toxicity.py'")
+
             with st.spinner("Predicting properties..."):
                 try:
                     results_list = []
-
+                    
                     for smiles in molecules_to_predict:
                         if not smiles:
                             continue
-
+                        
                         mol_results = {"Molecule": smiles}
-
-                        # --- 1. Get RDKit Properties ---
+                        
+                        # --- A. Get RDKit Properties ---
                         rdkit_props = self.get_rdkit_properties(smiles)
                         if properties_to_run["MW"]:
                             mol_results["MW"] = rdkit_props.get("MW", "N/A")
@@ -571,7 +576,7 @@ class DrugDiscoveryApp:
                         if properties_to_run["TPSA"]:
                             mol_results["TPSA"] = rdkit_props.get("TPSA", "N/A")
 
-                        # --- 2. Get AI Model Properties ---
+                        # --- B. Get Solubility Prediction ---
                         if properties_to_run["Solubility"] and solubility_model:
                             fp = self.get_fingerprint(smiles)
                             if fp is not None:
@@ -579,11 +584,18 @@ class DrugDiscoveryApp:
                                 mol_results["Solubility"] = pred[0]
                             else:
                                 mol_results["Solubility"] = "Error"
-
-                        # --- (Add other models here) ---
-
+                        
+                        # --- C. Get Toxicity Prediction (THIS IS NEW) ---
+                        if properties_to_run["Toxicity"] and toxicity_model:
+                            fp = self.get_fingerprint(smiles)
+                            if fp is not None:
+                                pred = toxicity_model.predict(fp)[0]
+                                mol_results["Toxicity"] = "⚠️ Toxic" if pred == 1 else "✅ Safe"
+                            else:
+                                mol_results["Toxicity"] = "Error"
+                        
                         results_list.append(mol_results)
-
+                    
                     # --- Display results ---
                     st.markdown("### Prediction Results")
                     if not results_list:
@@ -591,8 +603,7 @@ class DrugDiscoveryApp:
                     else:
                         df = pd.DataFrame(results_list)
                         st.dataframe(df, use_container_width=True)
-
-                        # Download button
+                        
                         csv = df.to_csv(index=False)
                         st.download_button(
                             label="📥 Download Results (CSV)",
@@ -600,11 +611,11 @@ class DrugDiscoveryApp:
                             file_name="property_predictions.csv",
                             mime="text/csv"
                         )
-
+                    
                 except Exception as e:
                     st.error(f"Prediction failed: {str(e)}")
                     st.exception(e)
-    
+                    
     def render_protein_page(self):
         """Render the protein structure prediction page."""
         st.markdown("## 🧬 Protein Structure Prediction")
