@@ -716,7 +716,6 @@ class DrugDiscoveryApp:
         """Render the protein structure prediction page."""
         st.markdown("## 🧬 Protein Structure Prediction")
 
-        # API URL for ESMFold
         ESMFOLD_API_URL = "https://api.esmatlas.com/foldSequence/v1/pdb/"
         
         mode = st.radio(
@@ -739,115 +738,110 @@ class DrugDiscoveryApp:
         with st.expander("🔧 Advanced Options"):
             timeout = st.slider("API Timeout (seconds)", 30, 300, 120)
 
+        # --- Button Logic: Runs only when clicked ---
         if st.button("🧬 Predict Structure", type="primary") and sequence_input:
             
-            # Clean up sequence
             sequence = "".join(sequence_input.split())
             if not sequence:
                 st.warning("Please enter a protein sequence.")
-                return
+                st.stop() # Stop execution if sequence is empty
 
             with st.spinner(f"Predicting structure for {len(sequence)} residues... (This can take a few minutes)"):
                 try:
-                    # --- REAL API CALL ---
                     headers = {'Content-Type': 'text/plain'}
                     response = requests.post(ESMFOLD_API_URL, data=sequence, headers=headers, timeout=timeout)
                     
                     if response.status_code == 200:
-                        pdb_string = response.text
+                        # --- THIS IS THE FIX ---
+                        # Save the PDB string and sequence to the session state
+                        st.session_state.pdb_string = response.text
+                        st.session_state.current_sequence = sequence
                         st.success("✅ Structure predicted successfully via API!")
-                        
-                        # --- 3D VISUALIZATION ---
-                        st.markdown("### 3D Structure Visualization")
-
-                        # Add controls for the user
-                        style_options = st.multiselect(
-                            "Visualization Styles:",
-                            ["Cartoon (Ribbon)", "Stick (Bonds)", "Sphere (Atoms)", "Surface"],
-                            default=["Cartoon (Ribbon)"]
-                        )
-
-                        color_style = st.radio(
-                            "Color Scheme:",
-                            ["Confidence (pLDDT)", "Spectrum (Rainbow)", "Chain"],
-                            horizontal=True
-                        )
-
-                        # Create the viewer
-                        view = py3Dmol.view(width=800, height=600)
-                        view.addModel(pdb_string, 'pdb')
-
-                        # Apply selected styles
-                        if "Cartoon (Ribbon)" in style_options:
-                            if color_style == "Confidence (pLDDT)":
-                                # Color by B-factor (pLDDT score): Red(0) -> Blue(100)
-                                view.setStyle({'cartoon': {'colorscheme': {'prop':'b','gradient':'roygb','min':50,'max':90}}})
-                            elif color_style == "Spectrum (Rainbow)":
-                                view.setStyle({'cartoon': {'color': 'spectrum'}})
-                            else:
-                                view.setStyle({'cartoon': {'color': 'chain'}})
-
-                        if "Stick (Bonds)" in style_options:
-                            view.addStyle({'stick': {}})
-
-                        if "Sphere (Atoms)" in style_options:
-                            view.addStyle({'sphere': {'scale': 0.3}})
-
-                        if "Surface" in style_options:
-                            view.addSurface(py3Dmol.SES, {'opacity': 0.8})
-
-                        view.zoomTo()
-                        view.spin(True) # Auto-spin makes it look cooler
-
-                        # Display
-                        showmol(view, height=600, width=800)
-                            
-                        # Use py3Dmol to render
-                        view = py3Dmol.view(width=800, height=600)
-                        view.addModel(pdb_string, 'pdb')
-                        view.setStyle({'cartoon': {'color': 'spectrum'}})
-                        view.zoomTo()
-                        
-                        # Display with stmol
-                        showmol(view, height=600, width=800)
-                        
-                        # --- CONFIDENCE METRICS ---
-                        # Parse PDB string for confidence (plDDT)
-                        avg_plddt = 0
-                        count = 0
-                        for line in pdb_string.split('\n'):
-                            if line.startswith("ATOM"):
-                                try:
-                                    # The plDDT score is in the B-factor column
-                                    plddt = float(line[60:66])
-                                    avg_plddt += plddt
-                                    count += 1
-                                except:
-                                    pass
-                        
-                        if count > 0:
-                            avg_plddt /= count
-                        
-                        st.markdown("### 📊 Confidence Metrics")
-                        col1, col2 = st.columns(2)
-                        col1.metric("Average plDDT Score", f"{avg_plddt:.2f}", help="Per-residue confidence (0-100). Higher is better.")
-                        col2.metric("Sequence Length", len(sequence))
-                        
-                        # --- DOWNLOAD ---
-                        st.download_button(
-                            "📥 Download PDB",
-                            data=pdb_string,
-                            file_name="predicted_structure.pdb",
-                            mime="chemical/x-pdb"
-                        )
                     else:
                         st.error(f"API Error (Status {response.status_code}): {response.text}")
+                        # Clear old results if the new call fails
+                        if 'pdb_string' in st.session_state:
+                            del st.session_state.pdb_string
+                        if 'current_sequence' in st.session_state:
+                            del st.session_state.current_sequence
 
                 except requests.exceptions.RequestException as e:
                     st.error(f"Failed to connect to ESMFold API: {e}")
                 except Exception as e:
                     st.error(f"Structure prediction failed: {str(e)}")
                     st.exception(e)
+
+        # --- VISUALIZATION LOGIC ---
+        # This block is now OUTSIDE the button. It will run every time,
+        # as long as the pdb_string exists in our session state.
+        if 'pdb_string' in st.session_state:
+            pdb_string = st.session_state.pdb_string
+            
+            st.markdown("### 3D Structure Visualization")
+
+            # --- Visualization Controls ---
+            style_options = st.multiselect(
+                "Visualization Styles:",
+                ["Cartoon (Ribbon)", "Stick (Bonds)", "Sphere (Atoms)", "Surface"],
+                default=["Cartoon (Ribbon)"]
+            )
+
+            color_style = st.radio(
+                "Color Scheme:",
+                ["Confidence (pLDDT)", "Spectrum (Rainbow)", "Chain"],
+                horizontal=True
+            )
+
+            # --- Viewer Logic ---
+            view = py3Dmol.view(width=800, height=600)
+            view.addModel(pdb_string, 'pdb')
+
+            # Apply selected styles
+            if "Cartoon (Ribbon)" in style_options:
+                if color_style == "Confidence (pLDDT)":
+                    view.setStyle({'cartoon': {'colorscheme': {'prop':'b','gradient':'roygb','min':50,'max':90}}})
+                elif color_style == "Spectrum (Rainbow)":
+                    view.setStyle({'cartoon': {'color': 'spectrum'}})
+                else:
+                    view.setStyle({'cartoon': {'color': 'chain'}})
+
+            if "Stick (Bonds)" in style_options:
+                view.addStyle({'stick': {}})
+            if "Sphere (Atoms)" in style_options:
+                view.addStyle({'sphere': {'scale': 0.3}})
+            if "Surface" in style_options:
+                view.addSurface(py3Dmol.SES, {'opacity': 0.8})
+
+            view.zoomTo()
+            view.spin(True)
+            showmol(view, height=600, width=800)
+            
+            # --- Confidence Metrics ---
+            avg_plddt = 0
+            count = 0
+            for line in pdb_string.split('\n'):
+                if line.startswith("ATOM"):
+                    try:
+                        plddt = float(line[60:66])
+                        avg_plddt += plddt
+                        count += 1
+                    except:
+                        pass
+            
+            if count > 0:
+                avg_plddt /= count
+            
+            st.markdown("### 📊 Confidence Metrics")
+            col1, col2 = st.columns(2)
+            col1.metric("Average plDDT Score", f"{avg_plddt:.2f}", help="Per-residue confidence (0-100). Higher is better.")
+            col2.metric("Sequence Length", len(st.session_state.get('current_sequence', '')))
+            
+            st.download_button(
+                "📥 Download PDB",
+                data=pdb_string,
+                file_name="predicted_structure.pdb",
+                mime="chemical/x-pdb"
+            )
     
     def render_settings_page(self):
         """Render the settings page."""
