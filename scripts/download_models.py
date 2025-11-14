@@ -3,7 +3,8 @@
 Model Download and Setup Script for Drug Discovery Assistant
 Downloads and prepares pre-trained models optimized for different memory profiles
 """
-
+import pandas as pd
+import numpy as np
 import os
 import sys
 import json
@@ -215,9 +216,7 @@ class ModelDownloader:
                 "unk_token": "[UNK]",
                 "mask_token": "[MASK]",
                 "special_tokens": ["[PAD]", "[BOS]", "[EOS]", "[UNK]", "[MASK]"],
-                "min_frequency": 2,
-                "model_type": "selfies",
-                "profile": self.profile
+                "min_frequency": 2
             }
             
             with open(tokenizer_dir / 'config.json', 'w') as f:
@@ -391,140 +390,77 @@ results = predictor.predict(molecules=["CCO", "CC(=O)O"])
             return False
     
     def download_sample_data(self):
-        """Download or generate sample molecular data."""
-        logger.info("Downloading sample data...")
-        
+        """Download and split the real molecular data."""
+        logger.info("Downloading real sample data...")
+
         try:
-            # Create sample SMILES dataset
-            sample_molecules = self._get_sample_molecules(extended=True)
-            
-            # Save to files
+            all_molecules = self._get_sample_molecules(extended=True)
+
+            # Shuffle the data for better splits
+            np.random.shuffle(all_molecules)
+
+            # Split data: 80% train, 10% validation, 10% test
+            total_size = len(all_molecules)
+            train_size = int(total_size * 0.8)
+            val_size = int(total_size * 0.1)
+
+            train_mols = all_molecules[:train_size]
+            val_mols = all_molecules[train_size : train_size + val_size]
+            test_mols = all_molecules[train_size + val_size :]
+
             data_files = {
-                "training_molecules.txt": sample_molecules[:80],
-                "validation_molecules.txt": sample_molecules[80:90],
-                "test_molecules.txt": sample_molecules[90:100]
+                "training_molecules.txt": train_mols,
+                "validation_molecules.txt": val_mols,
+                "test_molecules.txt": test_mols
             }
-            
+
             for filename, molecules in data_files.items():
                 file_path = self.data_dir / filename
                 with open(file_path, 'w') as f:
                     for mol in molecules:
                         f.write(mol + '\n')
                 logger.info(f"✓ Created {filename} with {len(molecules)} molecules")
-            
-            # Create dataset info file
+
             dataset_info = {
-                "total_molecules": len(sample_molecules),
-                "train_size": 80,
-                "val_size": 10,
-                "test_size": 10,
-                "source": "Generated sample data",
+                "total_molecules": total_size,
+                "train_size": len(train_mols),
+                "val_size": len(val_mols),
+                "test_size": len(test_mols),
+                "source": "Delaney (ESOL) Dataset",
                 "profile": self.profile
             }
-            
+
             with open(self.data_dir / 'dataset_info.json', 'w') as f:
                 json.dump(dataset_info, f, indent=2)
-            
-            logger.info("✓ Sample data downloaded successfully")
+
+            logger.info("✓ Real sample data downloaded successfully")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to download sample data: {e}")
             return False
     
     def _get_sample_molecules(self, extended: bool = False) -> List[str]:
-        """Get sample molecules for training/testing."""
-        # Drug-like molecules for training
-        base_molecules = [
-            "CCO",  # Ethanol
-            "CC(=O)O",  # Acetic acid
-            "C1=CC=CC=C1",  # Benzene
-            "CC(=O)OC1=CC=CC=C1C(=O)O",  # Aspirin
-            "CN1C=NC2=C1C(=O)N(C(=O)N2C)C",  # Caffeine
-            "CC(C)NCC(COC1=CC=CC=C1)O",  # Propranolol
-            "CC1=CC=C(C=C1)C(=O)O",  # p-Toluic acid
-            "CCOC(=O)C1=CN=CC=C1",  # Ethyl nicotinate
-            "CC(C)CC1=CC=C(C=C1)C(C)C(=O)O",  # Ibuprofen
-            "CN(C)CCN1C2=CC=CC=C2SC3=C1C=C(C=C3)Cl",  # Chlorpromazine
-        ]
-        
-        if extended:
-            # Add more diverse molecules
-            extended_molecules = [
-                "COC1=CC=CC=C1",  # Anisole
-                "CC(C)C1=CC=C(C=C1)C(C)C",  # p-Cymene
-                "C1CCCCC1",  # Cyclohexane
-                "CC1=CC=CC=C1C",  # o-Xylene
-                "C1=CC=C2C(=C1)C=CC=C2",  # Naphthalene
-                "CC(C)O",  # Isopropanol
-                "CC(C)(C)O",  # tert-Butanol
-                "CCCC(=O)O",  # Butyric acid
-                "CC(C)C(=O)O",  # Isobutyric acid
-                "C1=CC=C(C=C1)CO",  # Benzyl alcohol
-                "CC1=CC=C(C=C1)N",  # p-Toluidine
-                "CC(C)N",  # Isopropylamine
-                "CCCCN",  # Butylamine
-                "C1=CC=C(C=C1)O",  # Phenol
-                "CC(C)C1=CC(=C(C=C1)O)C(C)C",  # Thymol
-                "COC1=CC=C(C=C1)O",  # Mequinol
-                "CC(=O)OCC",  # Ethyl acetate
-                "CCOC(=O)C",  # Ethyl propanoate
-                "CC1=CC=C(C=C1)C",  # p-Xylene
-                "C1=CC(=CC=C1O)O",  # Hydroquinone
-                # Additional diverse structures
-                "C1=CC=C(C=C1)C(=O)C2=CC=CC=C2",  # Benzophenone
-                "CC(C)C1=CC=C(C=C1)OC",  # p-Methoxycumene
-                "CC1=C(C=CC=C1)N",  # o-Toluidine
-                "CCCCCC",  # Hexane
-                "CC(C)CC(C)C",  # 2,4-Dimethylpentane
-                "C1=CC=C(C=C1)Br",  # Bromobenzene
-                "CC(C)C1=CC=C(C=C1)Cl",  # p-Chlorocumene
-                "C1=CC=C(C=C1)N(C)C",  # N,N-Dimethylaniline
-                "CC1=CC=C(C=C1)S",  # p-Thiocresol
-                "CCOC1=CC=CC=C1",  # Phenetole
-                # More complex drug-like molecules
-                "CC1=C(C=C(C=C1)NC(=O)C2=CC=CC=C2)C",  # Toluamide derivative
-                "COC1=CC=C(C=C1)C=O",  # p-Anisaldehyde
-                "CC(=O)NC1=CC=C(C=C1)O",  # Paracetamol
-                "CC1=CC(=NO1)C2=CC=CC=C2",  # Isoxazole derivative
-                "C1=CC=C(C=C1)CC(=O)O",  # Phenylacetic acid
-                "CC(C)(C)C1=CC=C(C=C1)O",  # 4-tert-Butylphenol
-                "COC1=CC=C(C=C1)CCN",  # p-Methoxyphenethylamine
-                "CC1=CC=C(C=C1)C(C)(C)C",  # p-tert-Butyltoluene
-                "C1=CC=C(C=C1)C(C)(C)N",  # Cumylamine
-                "CC(C)OC(=O)C1=CC=CC=C1",  # Isopropyl benzoate
-                # Additional diverse structures for better training
-                "C1CCNCC1",  # Piperidine
-                "C1COCCN1",  # Morpholine
-                "CC(C)C(C)(C)C",  # 2,2,3-Trimethylbutane
-                "C1=CC=C2C(=C1)C(=O)C=C(O2)C",  # Coumarin derivative
-                "CC1=CC=C(C=C1)C=C",  # p-Methylstyrene
-                "CCCCOC(=O)C",  # Butyl acetate
-                "CC(C)C(=O)OC(C)C",  # Isopropyl isobutyrate
-                "C1=CC=C(C=C1)C#N",  # Benzonitrile
-                "CC1=CC=C(C=C1)C#C",  # p-Methylphenylacetylene
-                "C1=CC=C(C=C1)C(=O)N",  # Benzamide
-                # More diverse functional groups
-                "CC(C)C1=CC=CC=C1O",  # o-Isopropylphenol
-                "CCOC(C)=O",  # Ethyl acetate
-                "C1=CC=C(C=C1)S(=O)(=O)O",  # Benzenesulfonic acid
-                "CC1=CC=CC=C1N(C)C",  # N,N-Dimethyl-o-toluidine
-                "C1=CC=C2C(=C1)NC=N2",  # Benzimidazole
-                "CC(C)C1=NC=NC=C1",  # Isopropylpyrimidine
-                "C1=CC=C(C=C1)OCC=C",  # Allyl phenyl ether
-                "CC1=CC=C(C=C1)C(C)O",  # 1-(p-Tolyl)ethanol
-                "CCOC1=CC=C(C=C1)C=O",  # p-Ethoxybenzaldehyde
-                "C1=CC=C(C=C1)C(C)C",  # Cumene
-                "CC(C)(C)C1=CC=CC=C1",  # tert-Butylbenzene
-                "COC1=CC=CC=C1C=O",  # o-Anisaldehyde
-                "CC1=CC=C(C=C1)OC(C)C",  # p-Cresyl isopropyl ether
-                "C1=CC=C(C=C1)C(C)(C)Cl",  # Cumyl chloride
-                "CC(C)C1=CC=C(C=C1)C(C)C",  # p-Diisopropylbenzene
-                "CCOC(=O)C1=CC=CC=C1",  # Ethyl benzoate
+        """
+        Downloads and returns SMILES from the Delaney (ESOL) dataset.
+        """
+        data_url = "https://raw.githubusercontent.com/deepchem/deepchem/master/datasets/delaney-processed.csv"
+        logger.info(f"Downloading real dataset from: {data_url}")
+
+        try:
+            df = pd.read_csv(data_url)
+            # We use the 'smiles' column
+            molecules = df['smiles'].tolist()
+            logger.info(f"Loaded {len(molecules)} molecules from Delaney dataset.")
+            return molecules
+        except Exception as e:
+            logger.error(f"Failed to download or parse real dataset: {e}")
+            logger.warning("Falling back to small dummy dataset.")
+            # Fallback in case of download error
+            return [
+                "CCO", "CC(=O)O", "C1=CC=CC=C1", "CC(=O)OC1=CC=CC=C1C(=O)O",
+                "CN1C=NC2=C1C(=O)N(C(=O)N2C)C", "CC(C)NCC(COC1=CC=CC=C1)O"
             ]
-            return base_molecules + extended_molecules
-        
-        return base_molecules
     
     def _build_vocab_from_molecules(self, molecules: List[str]) -> Dict[str, int]:
         """Build vocabulary from SMILES molecules using SELFIES."""

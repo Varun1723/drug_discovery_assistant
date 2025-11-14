@@ -1,7 +1,7 @@
 {
   "is_trained": true,
-  "vocab_size": 19,
+  "vocab_size": 34,
   "num_special_tokens": 5,
-  "training_molecules": 10,
+  "training_molecules": 1128,
   "profile": "light"
 }

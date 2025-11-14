@@ -399,7 +399,15 @@ class LightweightTrainer:
         else:
             loss = self.compute_loss(input_ids, target_ids, attention_mask)
             loss = loss / self.gradient_accumulation_steps
-        
+
+        # --- START OF NEW CODE ---
+        # Check for nan/inf loss before backward pass
+        if not torch.isfinite(loss):
+            logger.warning(f"Skipping batch, loss is {loss}. Gradients will be zeroed.")
+            self.optimizer.zero_grad()
+            return None # Return None to signal a failed step
+        # --- END OF NEW CODE ---
+
         # Backward pass
         if self.use_amp:
             self.scaler.scale(loss).backward()
@@ -448,6 +456,12 @@ class LightweightTrainer:
                 accumulate=(accumulation_count + 1) < self.gradient_accumulation_steps
             )
             
+            # --- START OF NEW CODE ---
+            # Skip this batch if the loss was nan
+            if loss is None:
+                continue
+            # --- END OF NEW CODE ---
+
             total_loss += loss
             num_batches += 1
             accumulation_count += 1

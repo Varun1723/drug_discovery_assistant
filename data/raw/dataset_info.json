@@ -1,8 +1,8 @@
 {
-  "total_molecules": 76,
-  "train_size": 80,
-  "val_size": 10,
-  "test_size": 10,
-  "source": "Generated sample data",
+  "total_molecules": 1128,
+  "train_size": 902,
+  "val_size": 112,
+  "test_size": 114,
+  "source": "Delaney (ESOL) Dataset",
   "profile": "light"
 }
