@@ -1,5 +1,5 @@
 How To Run The Environment 
 1. python scripts/download_models.py --profile light
-2. IF -> conda activate base 
+2. IF -> conda activate base
 3. conda activate drug-discovery
 4. streamlit run app/main.py
