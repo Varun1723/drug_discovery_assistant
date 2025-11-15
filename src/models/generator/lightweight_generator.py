@@ -492,6 +492,45 @@ class LightweightTrainer:
             'memory_peak': max(self.memory_usage) if self.memory_usage else 0
         }
     
+    def evaluate_epoch(
+        self,
+        dataloader: DataLoader,
+        epoch: int = 0
+    ) -> Dict[str, float]:
+        """Run one validation epoch."""
+        self.model.eval()  # Set model to evaluation mode
+        total_loss = 0
+        num_batches = 0
+
+        try:
+            from tqdm import tqdm
+            pbar = tqdm(dataloader, desc=f"Epoch {epoch} (Val)")
+        except ImportError:
+            pbar = dataloader
+            print(f"Validating epoch {epoch}...")
+
+        with torch.no_grad():  # No gradients needed!
+            for batch in pbar:
+                input_ids = batch['input_ids'].to(self.device)
+                target_ids = batch['target_ids'].to(self.device)
+                attention_mask = batch['attention_mask'].to(self.device)
+
+                # Forward pass
+                if self.use_amp:
+                    with torch.cuda.amp.autocast():
+                        loss = self.compute_loss(input_ids, target_ids, attention_mask)
+                else:
+                    loss = self.compute_loss(input_ids, target_ids, attention_mask)
+
+                total_loss += loss.item()
+                num_batches += 1
+
+                if hasattr(pbar, 'set_postfix'):
+                    pbar.set_postfix({'val_loss': f'{loss.item():.4f}'})
+
+        avg_loss = total_loss / num_batches if num_batches > 0 else 0
+        return {'loss': avg_loss}
+
     def save_model(self, save_path: str, epoch: int = 0, metrics: Dict = None):
         """Save model checkpoint."""
         checkpoint = {

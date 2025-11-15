@@ -143,6 +143,24 @@ def train_generator(
                 pin_memory=(device == 'cuda')
             )
             
+            # --- START OF NEW CODE ---
+            if val_molecules:
+                val_dataset = MolecularDataset(
+                    val_molecules,
+                    tokenizer,
+                    max_length=128 if profile == 'light' else 256
+                )
+                val_loader = DataLoader(
+                    val_dataset,
+                    batch_size=batch_size,
+                    shuffle=False,
+                    num_workers=0,
+                    pin_memory=(device == 'cuda')
+                )
+            else:
+                val_loader = None
+            # --- END OF NEW CODE ---
+
             # Create trainer
             gradient_accumulation = 4 if profile == 'light' else 2
             trainer = LightweightTrainer(
@@ -155,29 +173,67 @@ def train_generator(
             
             # Training loop
             logger.info("\nStarting training...")
-            best_loss = float('inf')
-            
+            best_val_loss = float('inf')
+            train_history = []
+            val_history = []
+
             for epoch in range(epochs):
-                metrics = trainer.train_epoch(train_loader, epoch=epoch)
-                
+                # --- Train for one epoch ---
+                train_metrics = trainer.train_epoch(train_loader, epoch=epoch)
+                train_history.append(train_metrics)
+
                 logger.info(f"\nEpoch {epoch+1}/{epochs}")
-                logger.info(f"  Loss: {metrics['loss']:.4f}")
-                logger.info(f"  Learning Rate: {metrics['learning_rate']:.2e}")
-                
-                if device == 'cuda':
-                    logger.info(f"  Peak Memory: {metrics['memory_peak']:.1f} GB")
-                
-                # Save best model
-                if metrics['loss'] < best_loss:
-                    best_loss = metrics['loss']
-                    save_path = output_dir / f"generator_{model_type}_best.pt"
-                    trainer.save_model(save_path, epoch=epoch, metrics=metrics)
-                    logger.info(f"  ✓ Saved best model (loss: {best_loss:.4f})")
-                
+                logger.info(f"  Train Loss: {train_metrics['loss']:.4f}")
+                logger.info(f"  Learning Rate: {train_metrics['learning_rate']:.2e}")
+
+                # --- Run validation ---
+                if val_loader:
+                    val_metrics = trainer.evaluate_epoch(val_loader, epoch=epoch)
+                    val_history.append(val_metrics)
+                    logger.info(f"  Val Loss:   {val_metrics['loss']:.4f}")
+
+                    # Save best model based on validation loss
+                    if val_metrics['loss'] < best_val_loss:
+                        best_val_loss = val_metrics['loss']
+                        save_path = output_dir / f"generator_{model_type}_best.pt"
+                        trainer.save_model(save_path, epoch=epoch, metrics={'train_loss': train_metrics['loss'], 'val_loss': val_metrics['loss']})
+                        logger.info(f"  ✓ Saved best model (val_loss: {best_val_loss:.4f})")
+                else:
+                    # If no validation, just save based on train loss
+                    if train_metrics['loss'] < best_val_loss:
+                        best_val_loss = train_metrics['loss']
+                        save_path = output_dir / f"generator_{model_type}_best.pt"
+                        trainer.save_model(save_path, epoch=epoch, metrics={'train_loss': train_metrics['loss']})
+                        logger.info(f"  ✓ Saved best model (train_loss: {best_val_loss:.4f})")
+
                 # Save checkpoint every 5 epochs
                 if (epoch + 1) % 5 == 0:
                     checkpoint_path = output_dir / f"generator_{model_type}_epoch{epoch+1}.pt"
-                    trainer.save_model(checkpoint_path, epoch=epoch, metrics=metrics)
+                    trainer.save_model(checkpoint_path, epoch=epoch, metrics={'train_loss': train_metrics['loss']})
+
+            # --- After the loop, save the history ---
+            history = {
+                'train_loss': [m['loss'] for m in train_history],
+                'val_loss': [m['loss'] for m in val_history] if val_history else [],
+                'learning_rate': [m['learning_rate'] for m in train_history]
+            }
+            with open(output_dir / f"generator_{model_type}_training_history.json", 'w') as f:
+                json.dump(history, f, indent=2)
+
+            logger.info(f"Training history saved to {output_dir / f'generator_{model_type}_training_history.json'}")
+
+            # Final save
+            final_path = output_dir / f"generator_{model_type}_final.pt"
+            trainer.save_model(final_path, epoch=epochs, metrics={'train_loss': train_metrics['loss']})
+
+            logger.info("\n" + "="*60)
+            logger.info("TRAINING COMPLETE")
+            logger.info("="*60)
+            logger.info(f"Best Validation Loss: {best_val_loss:.4f}")
+            logger.info(f"Final model: {final_path}")
+            logger.info(f"Best model: {output_dir / f'generator_{model_type}_best.pt'}")
+
+            return True
             
             # Final save
             final_path = output_dir / f"generator_{model_type}_final.pt"
