@@ -49,3 +49,7 @@ demo_report.json
 # OS-specific files
 .DS_Store
 Thumbs.db
+
+# Ignore all ZIP and CSV files
+.zip
+.csv
