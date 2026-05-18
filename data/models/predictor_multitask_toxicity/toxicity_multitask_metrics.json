@@ -1,6 +1,20 @@
 {
-  "accuracy": 0.6662412252712189,
-  "weighted_auc": 0.7899152708883941,
+  "xgboost": {
+    "weighted_auc": 0.7619649349288468,
+    "weighted_auprc": 0.35525863498603566,
+    "weighted_f1": 0.2587318967133643,
+    "weighted_recall": 0.7297056199821588,
+    "weighted_precision": 0.1673025416869665,
+    "custom_threshold": 0.3
+  },
+  "random_forest_baseline": {
+    "weighted_auc": 0.7928558485655088,
+    "weighted_auprc": 0.37167707082832013,
+    "weighted_f1": 0.39135948715899904,
+    "weighted_recall": 0.3389830508474576,
+    "weighted_precision": 0.48157280459358764,
+    "custom_threshold": 0.3
+  },
   "tasks": [
     "NR-AR",
     "NR-AR-LBD",
@@ -15,6 +29,6 @@
     "SR-MMP",
     "SR-p53"
   ],
-  "n_samples_train": 6264,
-  "n_samples_test": 1567
+  "n_samples_train": 6258,
+  "n_samples_test": 1565
 }
